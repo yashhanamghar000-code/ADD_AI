@@ -1,18 +1,25 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, lazy, Suspense, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Menu, X, PanelLeft } from "lucide-react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AuditoWordmark } from "@/components/brand/AuditoLogo";
+import { useCitationViewer } from "@/hooks/useCitationViewer";
+const CitationPdfPanel = lazy(() => import("@/components/citation/CitationPdfPanel"));
 
 const SIDEBAR_STATE_KEY = "audito_sidebar_open";
 
 export function ChatLayout({ children }: { children: ReactNode }) {
+  const { activeCitation, close } = useCitationViewer();
   const [mobileOpen, setMobileOpen] = useState(false);
-  // Device-level UI preference, not per-user data — plain localStorage is
-  // fine here (unlike auth/chat data, there's nothing sensitive or
-  // user-specific about whether the sidebar happens to be collapsed).
+
+  // Only true after mounting in the browser — stays false during SSR and
+  // the very first client render, so the lazy import only starts once
+  // we're safely on the client.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [desktopOpen, setDesktopOpen] = useState(() => {
     const stored = window.localStorage.getItem(SIDEBAR_STATE_KEY);
     return stored === null ? true : stored === "true";
@@ -22,8 +29,6 @@ export function ChatLayout({ children }: { children: ReactNode }) {
     window.localStorage.setItem(SIDEBAR_STATE_KEY, String(desktopOpen));
   }, [desktopOpen]);
 
-  // Ctrl+. (or Cmd+. on Mac) toggles the sidebar, matching the shortcut
-  // shown in Claude's own sidebar-toggle tooltip.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === ".") {
@@ -37,8 +42,6 @@ export function ChatLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
-      {/* Desktop sidebar — collapses to width 0 instead of unmounting, so
-          the slide animation has something to animate from/to. */}
       <motion.aside
         initial={false}
         animate={{ width: desktopOpen ? 300 : 0 }}
@@ -51,7 +54,6 @@ export function ChatLayout({ children }: { children: ReactNode }) {
         </div>
       </motion.aside>
 
-      {/* Mobile drawer */}
       <AnimatePresence>
         {mobileOpen && (
           <>
@@ -76,7 +78,6 @@ export function ChatLayout({ children }: { children: ReactNode }) {
       </AnimatePresence>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Mobile top bar */}
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-3 md:hidden">
           <Button variant="ghost" size="icon" onClick={() => setMobileOpen(true)} aria-label="Open menu">
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -85,9 +86,6 @@ export function ChatLayout({ children }: { children: ReactNode }) {
           <div className="w-9" />
         </div>
 
-        {/* Desktop sidebar toggle — sits at the top-left of the main
-            content area so it stays reachable even when the sidebar is
-            fully collapsed, same placement as Claude's own toggle. */}
         <div className="hidden h-12 shrink-0 items-center px-3 md:flex">
           <TooltipProvider delayDuration={200}>
             <Tooltip>
@@ -110,6 +108,13 @@ export function ChatLayout({ children }: { children: ReactNode }) {
 
         <main className="min-h-0 flex-1">{children}</main>
       </div>
+
+      {/* Citation PDF panel — client-only, lazy-loaded */}
+      {mounted && activeCitation && (
+        <Suspense fallback={null}>
+          <CitationPdfPanel citation={activeCitation} onClose={close} />
+        </Suspense>
+      )}
     </div>
   );
 }

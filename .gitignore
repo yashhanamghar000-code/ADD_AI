@@ -1,53 +1,114 @@
-# Virtual Environments
-venv/
-env/
-.venv/
-
-# Python cache
+# ==========================
+# Python
+# ==========================
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
-# Bytecode
-*.pyo
-*.pyd
+# ==========================
+# Virtual Environments
+# ==========================
+venv/
+env/
+.venv/
+ENV/
 
-# Distribution
-build/
-dist/
-*.egg-info/
+# ==========================
+# Environment Variables
+# ==========================
+.env
+.env.*
+!.env.example
 
-# IDE
+# ==========================
+# IDEs
+# ==========================
 .vscode/
 .idea/
 
-# OS files
+# ==========================
+# OS Files
+# ==========================
 .DS_Store
 Thumbs.db
 
-# Environment variables
-.env
-.env.*
-
+# ==========================
 # Logs
+# ==========================
+logs/
+log/
 *.log
+debug_logs/
+*.out
 
-# pytest
+# ==========================
+# Python Testing & Cache
+# ==========================
 .pytest_cache/
-
-# mypy
 .mypy_cache/
-
-# Ruff
 .ruff_cache/
-
-# Coverage
 .coverage
+.coverage.*
 htmlcov/
+.cache/
 
+# ==========================
+# Build Files
+# ==========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ==========================
 # Jupyter
+# ==========================
 .ipynb_checkpoints/
 
-# SQLite
+# ==========================
+# Databases
+# ==========================
 *.db
+*.sqlite
 *.sqlite3
+
+# ==========================
+# Vector Databases
+# ==========================
+chroma_db/
+faiss_index/
+vectorstore/
+bm25_cache/
+
+# ==========================
+# Uploaded Files
+# ==========================
+uploads/
+data/
+temp/
+tmp/
+
+# ==========================
+# Generated Files
+# ==========================
+*.pdf
+*.docx
+*.xlsx
+*.csv
+
+# Uncomment the above only if these files are generated.
+# If your project contains sample PDFs/CSVs that should
+# be committed, comment out these lines.
+
+# ==========================
+# Docker
+# ==========================
+docker-compose.override.yml
+
+# ==========================
+# Misc
+# ==========================
+*.bak
+*.swp
+*.tmp

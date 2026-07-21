@@ -17,6 +17,7 @@ import { AuditoLogo } from "@/components/brand/AuditoLogo";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
+import CitationChip from "@/components/citation/CitationChip";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/types";
 import { toast } from "sonner";

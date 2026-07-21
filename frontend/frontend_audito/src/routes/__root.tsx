@@ -14,6 +14,7 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ChatProvider } from "@/contexts/ChatContext";
+import { CitationViewerProvider } from "@/hooks/useCitationViewer";
 import { Toaster } from "@/components/ui/sonner";
 
 function NotFoundComponent() {
@@ -127,8 +128,10 @@ function RootComponent() {
       <ThemeProvider>
         <AuthProvider>
           <ChatProvider>
-            <Outlet />
-            <Toaster />
+            <CitationViewerProvider>
+              <Outlet />
+              <Toaster />
+            </CitationViewerProvider>
           </ChatProvider>
         </AuthProvider>
       </ThemeProvider>
