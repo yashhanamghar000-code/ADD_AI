@@ -1,3 +1,13 @@
+"""
+FULL FILE — replace your existing backend/app/api/routers/upload_router.py.
+
+Change vs. your current version: the incoming file is now written straight
+to `settings.storage_dir/<user_id>/<file_id-placeholder>_<filename>`
+instead of a throwaway temp_uploads path — this permanent copy is what the
+citation viewer streams back later. The Celery task receives that same
+permanent path and now leaves the file in place after ingestion (see the
+updated tasks.py) instead of deleting it.
+"""
 import os
 import traceback
 import uuid
@@ -22,8 +32,6 @@ async def upload_document(
     container: Container = Depends(get_container),
     current_user: UserModel = Depends(get_current_user),
 ):
-    """Stages incoming payloads to local temp disk before handing a path
-    reference down into Celery — keeps large files off the Redis broker."""
     user_id = str(current_user.id)
     try:
         print("\n==============================")
@@ -33,29 +41,33 @@ async def upload_document(
         print("Session:", session_id)
         print("File:", file.filename)
 
-        os.makedirs(settings.temp_upload_dir, exist_ok=True)
+        # Permanent, per-user storage directory — NOT a temp dir. The file
+        # written here is what the citation viewer re-opens later, so it
+        # must survive past ingestion.
+        user_storage_dir = os.path.join(settings.storage_dir, user_id)
+        os.makedirs(user_storage_dir, exist_ok=True)
+
         unique_prefix = uuid.uuid4().hex
         safe_filename = f"{unique_prefix}_{file.filename}"
-        local_file_path = os.path.join(settings.temp_upload_dir, safe_filename)
+        permanent_file_path = os.path.join(user_storage_dir, safe_filename)
 
         file_has_content = False
-        with open(local_file_path, "wb") as buffer:
-            while chunk := await file.read(65536):  # 64KB chunks
+        with open(permanent_file_path, "wb") as buffer:
+            while chunk := await file.read(65536):
                 file_has_content = True
                 buffer.write(chunk)
 
         if not file_has_content:
-            if os.path.exists(local_file_path):
-                os.remove(local_file_path)
+            if os.path.exists(permanent_file_path):
+                os.remove(permanent_file_path)
             raise HTTPException(status_code=422, detail="Uploaded file is empty.")
 
-        # Postgres row created UP FRONT (status="processing") so we have a
-        # stable file_id before the worker even starts — that id gets
-        # stamped onto every chunk this file produces.
-        file_record = container.history_service.create_pending_file(current_user.id, session_id, file.filename)
+        file_record = container.history_service.create_pending_file(
+            current_user.id, session_id, file.filename, permanent_file_path
+        )
         file_id = str(file_record.id)
 
-        task = process_document_task.delay(local_file_path, file.filename, user_id, session_id, file_id)
+        task = process_document_task.delay(permanent_file_path, file.filename, user_id, session_id, file_id)
 
         print(f"Enqueued Celery task: {task.id} (file_id={file_id})\n")
 
@@ -71,7 +83,6 @@ async def upload_document(
 
 @router.get("/upload/status/{task_id}")
 async def upload_status(task_id: str, current_user: UserModel = Depends(get_current_user)):
-    """Poll from the frontend to drive the 'parsing stages' UI."""
     result = AsyncResult(task_id, app=celery_app)
 
     if result.state == "PENDING":

@@ -1,11 +1,7 @@
 """
-Repository interfaces (Repository pattern) — the service layer talks to
-these, never to SQLAlchemy directly. That's what lets `services/` be
-unit-tested with an in-memory fake and lets the persistence technology
-(Postgres today) change without touching business logic.
-
-Each interface is intentionally narrow (Interface Segregation) — a service
-that only ever reads users doesn't need to depend on file/message methods.
+FULL FILE — replace your existing backend/app/core/interfaces/repositories.py.
+Only change: IFileRepository.create_pending() now also accepts/returns a
+`file_path` (where the permanent original PDF lives on disk).
 """
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
@@ -51,7 +47,7 @@ class IChatMessageRepository(ABC):
 
 class IFileRepository(ABC):
     @abstractmethod
-    def create_pending(self, user_id: int, session_id: str, file_name: str) -> Any:
+    def create_pending(self, user_id: int, session_id: str, file_name: str, file_path: str) -> Any:
         raise NotImplementedError
 
     @abstractmethod

@@ -1,0 +1,41 @@
+=== CHUNK AUDIT LOG: YASH_BE_result.pdf | 1 SEGMENTS ===
+
+--- CHUNK 1 | Source: YASH_BE_result.pdf | Page: 1 ---
+ATTENTION LLM: FILE: 'YASH_BE_result.pdf' | PAGE: 1 
+[Visual Content Note: Page contains embedded visual layers.]
+[System Note: Text extracted via OCR.]
+a
+Gx SAVITRIBAI PHULE PUNE UNIVERSITY
+ta (formerly University of Pune)
+— GANESHKHIND,PUNE 411007
+Branch/Course: B.E. (2019 PAT.)(INFORMATION TECHNOLOGY)SUMMER SESSION 2026
+Seat No: B400450549 Center: [CEGP012620] Perm Reg No(PRN): 72242325L
+Student Name: HANAMGHAR YASH DILIP Mother Name: DIPALI
+Inst.Name: [CEGP012620] MARATHWADA MITRA MANDAL'S COLLEGE OF ENGINEERING
+Sem SubCode Subject Name Crd Grd GP
+7 414441 INFO. & STORAGE RETRIEVAL *3 le) 30
+414442 SOFTWARE PROJECT MANAGEMENT *3 At 27
+414443 DEEP LEARNING *3 At 27
+414444C MULTIMEDIA TECHNOLOGY *3 A 24
+414445B INTRODUCTION TO DEVOPS *3 A 24
+414446 LAB PRACTICE III *2 le} 20
+414447 LAB PRACTICE IV bal le) 10
+414448 PROJECT STAGE-I *2 le) 20
+4144490 COPYRIGHTS AND PATENTS. *0 P 00
+8 404456 PROJECT STAGE II 5 oO 50
+414450 DISTRIBUTED SYSTEMS 3 At 27
+414451B SOCIAL COMPUTING 3 le) 30
+414452C BUSINESS ANALYTICS & INTEL. 3 At 27
+414453 STARTUP & ENTREPRENEURSHIP. 3 A 24
+414454 LAB PRACTICE V 2 oO 20
+414455 LAB PRACTICE VI 1 le) 10
+414457B CYBER LAWS & USE OF S.M. 0 P 00
+TOTAL CREDITS EARNED : 40FOURTH YEAR SGPA :- 9.03 CGPA FIRST CLASS
+RESULT DATE: 15 July 2026
+The results published online are for immediate information only. These cannot be treated as original statement
+of marks,Please verify the information from original statement of marks issued by the Savitribai Phule Pune
+University separately.
+1of1 Savitribai Phule Pune University,Online Result Download Date:15/07/2026
+
+==================================================
+

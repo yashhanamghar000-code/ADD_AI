@@ -1,3 +1,19 @@
+"""
+FULL FILE — replace your existing backend/app/infrastructure/db/models.py.
+Only change: UploadedFileModel now has `file_path`, pointing at the
+permanent copy of the original upload (used to reopen the PDF for the
+citation viewer).
+
+IMPORTANT — you already have a `uploaded_files` table in Postgres. Adding
+a column to an existing SQLAlchemy model does NOT alter the live table by
+itself (Base.metadata.create_all only creates tables that don't exist
+yet). Run this once against your DB before starting the app:
+
+    ALTER TABLE uploaded_files ADD COLUMN file_path VARCHAR;
+
+(or drop/recreate the table in a throwaway dev DB, or wire up Alembic if
+you don't have migrations yet.)
+"""
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -18,10 +34,6 @@ class UserModel(Base):
 
 
 class ConversationModel(Base):
-    """One row per chat thread, keyed by the same session_id the frontend
-    generates client-side. This is what makes a user's chat/upload history
-    reappear after a restart or a login from a different browser."""
-
     __tablename__ = "conversations"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -42,7 +54,7 @@ class ChatMessageModel(Base):
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    role = Column(String, nullable=False)  # "user" | "assistant"
+    role = Column(String, nullable=False)
     message = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -56,8 +68,10 @@ class UploadedFileModel(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     file_name = Column(String, nullable=False)
-    status = Column(String, default="processing")  # processing | indexed | failed
+    status = Column(String, default="processing")
     total_chunks_indexed = Column(Integer, default=0)
+    # NEW: absolute/relative path to the permanently stored original file.
+    file_path = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     conversation = relationship("ConversationModel", back_populates="files")

@@ -1,3 +1,11 @@
+"""
+FULL FILE — replace your existing
+backend/app/infrastructure/repositories/sqlalchemy_file_repository.py.
+Changes: create_pending() now stores file_path; get_owned()'s result
+(already returned as the ORM object) exposes .file_path for the new
+streaming endpoint; delete() now also returns file_path so the caller can
+remove the file from disk.
+"""
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -12,11 +20,7 @@ class SqlAlchemyFileRepository(IFileRepository):
         self._db = db
         self._conversations = conversation_repository
 
-    def create_pending(self, user_id: int, session_id: str, file_name: str) -> UploadedFileModel:
-        """Creates the row BEFORE async processing runs, giving us a stable
-        id up front. That id gets stamped onto every chunk this file
-        produces, which is what lets one specific upload be deleted or
-        selected-for-search later — even if two uploads share a filename."""
+    def create_pending(self, user_id: int, session_id: str, file_name: str, file_path: str) -> UploadedFileModel:
         conv = self._conversations.get_or_create(user_id, session_id, title_hint=file_name)
         f = UploadedFileModel(
             conversation_id=conv.id,
@@ -24,6 +28,7 @@ class SqlAlchemyFileRepository(IFileRepository):
             file_name=file_name,
             status="processing",
             total_chunks_indexed=0,
+            file_path=file_path,
         )
         self._db.add(f)
         self._db.commit()
@@ -38,7 +43,6 @@ class SqlAlchemyFileRepository(IFileRepository):
             self._db.commit()
 
     def get_owned(self, user_id: int, file_id: int) -> Optional[UploadedFileModel]:
-        """Ownership-checked lookup — a user can only ever fetch their own files."""
         return (
             self._db.query(UploadedFileModel)
             .join(ConversationModel, UploadedFileModel.conversation_id == ConversationModel.id)
@@ -50,7 +54,7 @@ class SqlAlchemyFileRepository(IFileRepository):
         f = self.get_owned(user_id, file_id)
         if not f:
             return None
-        info = {"file_name": f.file_name, "session_id": f.conversation.session_id}
+        info = {"file_name": f.file_name, "session_id": f.conversation.session_id, "file_path": f.file_path}
         self._db.delete(f)
         self._db.commit()
         return info

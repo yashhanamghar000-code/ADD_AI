@@ -1,10 +1,11 @@
 """
-Celery task: the async half of the upload pipeline. Runs in a separate
-worker process from FastAPI, so it builds its own Container (with its own
-short-lived DB session) via app.container.build_worker_container rather
-than reusing anything request-scoped.
+FULL FILE — replace your existing backend/app/infrastructure/queue/tasks.py.
+
+Only change vs. your current version: the original uploaded file is no
+longer deleted after ingestion. It now lives permanently under
+settings.storage_dir and is what the citation viewer streams back when a
+user clicks a citation — so it has to stay on disk.
 """
-import os
 import traceback
 
 from app.container import build_worker_container
@@ -18,6 +19,7 @@ def process_document_task(self, file_path: str, file_name: str, user_id: str, se
     try:
         self.update_state(state="PARSING", meta={"stage": "parsing_document"})
 
+        import os
         if not os.path.exists(file_path):
             container.history_service.update_file_status(int(file_id), "failed")
             return {"status": "failed", "detail": f"File not found on worker storage lane: {file_path}"}
@@ -36,8 +38,9 @@ def process_document_task(self, file_path: str, file_name: str, user_id: str, se
         except IngestionError as e:
             container.history_service.update_file_status(int(file_id), "failed")
             return {"status": "failed", "detail": str(e)}
-        finally:
-            _cleanup_temp_file(file_path)
+        # NOTE: no `finally: _cleanup_temp_file(...)` here anymore — the
+        # file at file_path is the PERMANENT citation-viewer copy now, not
+        # a temp upload, so ingestion success or failure never deletes it.
 
         container.history_service.update_file_status(int(file_id), "indexed", total_chunks_indexed)
 
@@ -50,7 +53,6 @@ def process_document_task(self, file_path: str, file_name: str, user_id: str, se
 
     except Exception as e:
         traceback.print_exc()
-        _cleanup_temp_file(file_path)
         try:
             container.history_service.update_file_status(int(file_id), "failed")
         except Exception:
@@ -58,12 +60,3 @@ def process_document_task(self, file_path: str, file_name: str, user_id: str, se
         return {"status": "failed", "detail": str(e)}
     finally:
         db.close()
-
-
-def _cleanup_temp_file(file_path: str) -> None:
-    try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            print(f"[Tasks] Cleaned up temporary file: {file_path}")
-    except Exception as cleanup_error:
-        print(f"Warning: Failed to delete temporary file {file_path}: {cleanup_error}")

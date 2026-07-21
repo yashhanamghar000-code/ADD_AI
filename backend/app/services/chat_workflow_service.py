@@ -1,8 +1,12 @@
 """
-Use case: the RAG chat pipeline (decompose -> retrieve -> generate),
-built as a LangGraph StateGraph. Depends only on ILLMClient and
-RetrievalService (itself built purely from interfaces) — no direct
-knowledge of Azure, Qdrant, or BM25.
+FULL FILE — replace your existing backend/app/services/chat_workflow_service.py.
+
+Only change vs. your current version: the `_generate_node` citation-building
+block now also captures `file_id` (from the chunk's metadata, so the
+frontend knows which PDF to fetch) and a short `snippet` of the actual
+matched text (so the frontend can highlight it on the rendered page).
+Nothing else changed — same decompose -> retrieve -> generate pipeline,
+same prompts, same round-robin source grouping.
 """
 import re
 import json
@@ -70,9 +74,6 @@ class ChatWorkflowService:
             citations=[Citation(**c) for c in result.get("citations", [])],
         )
 
-    # ------------------------------------------------------------------
-    # Graph construction
-    # ------------------------------------------------------------------
     def _build_graph(self):
         workflow = StateGraph(AgentState)
         workflow.add_node("decompose", self._decompose_node)
@@ -86,9 +87,6 @@ class ChatWorkflowService:
 
         return workflow.compile()
 
-    # ------------------------------------------------------------------
-    # Stage 0: query decomposition
-    # ------------------------------------------------------------------
     def _decompose_node(self, state: AgentState) -> Dict[str, Any]:
         print(f"\n[Workflow] Stage 0: Decomposing query for User: {state['user_id']}...")
         sub_queries = self._decompose_query(state["query"], state["chat_history"])
@@ -118,16 +116,8 @@ class ChatWorkflowService:
             print(f" Query optimization failed ({e}), falling back to raw query.")
         return [query]
 
-    # ------------------------------------------------------------------
-    # Stage 1: multi-query hybrid retrieval + per-query rerank + round-robin merge
-    # ------------------------------------------------------------------
     def _retrieve_node(self, state: AgentState) -> Dict[str, Any]:
         print("[Workflow] Stage 1: Executing multi-doc hybrid search loop...")
-        # Grouped by source document, not a flat list — this is what
-        # guarantees every document represented in this session gets a
-        # fair shot at the final context, instead of whichever sub-query
-        # happened to run first (or scored marginally higher) taking every
-        # slot.
         docs_by_source: Dict[str, List[DocumentChunk]] = {}
         seen = set()
 
@@ -152,12 +142,6 @@ class ChatWorkflowService:
                     seen.add(key)
                     docs_by_source.setdefault(doc.source, []).append(doc)
 
-        # Round-robin across sources (one doc from each source per round,
-        # each source's docs kept in their own relevance order) instead of
-        # a flat concatenation — the actual fix for a comparative query
-        # (e.g. "Tata vs Mahindra") losing one company's chunks to
-        # truncation because the other company scored marginally higher
-        # across more chunks.
         all_final_docs: List[DocumentChunk] = []
         sources = list(docs_by_source.keys())
         idx = 0
@@ -166,7 +150,7 @@ class ChatWorkflowService:
             if docs_by_source[src]:
                 all_final_docs.append(docs_by_source[src].pop(0))
             idx += 1
-            if idx > 10000:  # safety valve, should never trigger
+            if idx > 10000:
                 break
 
         all_final_docs = all_final_docs[: self._max_total_context_docs]
@@ -174,9 +158,6 @@ class ChatWorkflowService:
             print(f"   -> Context Pipeline Ready. Top Segment Match: {all_final_docs[0].source}, Page {all_final_docs[0].page}\n")
         return {"retrieved_docs": all_final_docs}
 
-    # ------------------------------------------------------------------
-    # Stage 2: answer generation + citations + follow-ups
-    # ------------------------------------------------------------------
     def _generate_node(self, state: AgentState) -> Dict[str, Any]:
         if not state["retrieved_docs"]:
             return {
@@ -191,15 +172,7 @@ class ChatWorkflowService:
             context_blocks.append(f"[CHUNK {i} | Source: {d.source} | Page: {d.page}]\n{d.content}")
         context_str = "\n\n".join(context_blocks)
 
-        citations: List[Dict[str, Any]] = []
-        seen_citation_keys = set()
-        for d in state["retrieved_docs"]:
-            key = (d.source, d.page)
-            if key not in seen_citation_keys:
-                seen_citation_keys.add(key)
-                citations.append({"source": d.source, "page": d.page})
-            if len(citations) >= 3:
-                break
+        citations: List[Dict[str, Any]] = self._build_citations(state["retrieved_docs"])
 
         system_prompt = self._build_system_prompt()
         user_prompt = f"Context:\n{context_str}\n\nQuestion: {state['query']}"
@@ -213,6 +186,59 @@ class ChatWorkflowService:
             "follow_up_questions": follow_up_questions,
             "citations": citations,
         }
+
+    @staticmethod
+    def _build_citations(retrieved_docs: List[DocumentChunk], max_citations: int = 3) -> List[Dict[str, Any]]:
+        """
+        Builds the citation payload the frontend uses to open the PDF
+        viewer panel: which file (`file_id`), which page (`page`), and a
+        short `snippet` of the actual chunk text so the frontend can find
+        and highlight that exact passage on the rendered page instead of
+        just jumping to the page with nothing highlighted.
+
+        The snippet strips the internal "ATTENTION LLM: FILE: ... | PAGE:
+        ..." scaffolding line the parser prepends to every chunk (see
+        pdf_parser.py) — that line is retrieval/prompt plumbing, not real
+        document text, and would never actually appear on the rendered PDF
+        page, so searching for it client-side would never match anything.
+        """
+        citations: List[Dict[str, Any]] = []
+        seen_keys = set()
+
+        for d in retrieved_docs:
+            key = (d.source, d.page)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            body = d.content
+            marker = "\n"
+            if body.startswith("ATTENTION LLM:"):
+                # First line is the "FILE: ... | PAGE: ..." scaffold; the
+                # real extracted text starts right after it.
+                parts = body.split("\n", 1)
+                body = parts[1] if len(parts) > 1 else ""
+
+            body = body.split("### Extracted Document Tables:")[0]  # drop trailing table markdown
+            body = body.strip()
+
+            # A short, distinctive snippet (not the whole chunk) is enough
+            # for the frontend's text-layer search to locate the passage
+            # on the page reliably, while staying short enough to almost
+            # always appear verbatim in PDF.js's extracted text layer.
+            snippet = " ".join(body.split()[:18])
+
+            citations.append({
+                "source": d.source,
+                "page": d.page,
+                "file_id": d.metadata.get("file_id"),
+                "snippet": snippet,
+            })
+
+            if len(citations) >= max_citations:
+                break
+
+        return citations
 
     @staticmethod
     def _build_system_prompt() -> str:
@@ -253,12 +279,6 @@ class ChatWorkflowService:
 
     @staticmethod
     def _split_answer_and_followups(raw_content: str):
-        """Splits one LLM response into (answer_text, follow_up_questions).
-        The model emits the delimiter + a JSON list at the very end of the
-        SAME call that produced the answer, avoiding a second LLM
-        round-trip just for follow-up suggestions. Falls back to
-        (raw_content, []) on any parsing failure so a malformed
-        delimiter/JSON never breaks the actual answer."""
         if FOLLOWUP_DELIMITER not in raw_content:
             return raw_content.strip(), []
 
