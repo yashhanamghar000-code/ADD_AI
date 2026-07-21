@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/contexts/ChatContext";
 import CitationChip from "@/components/citation/CitationChip";
+
 import { cn } from "@/lib/utils";
 import type { Message } from "@/types";
 import { toast } from "sonner";
@@ -123,19 +124,12 @@ export function MessageBubble({ message, isLast }: { message: Message; isLast?: 
         </div>
 
         {!isUser && !!message.citations?.length && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+         <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Sources:</span>
             {message.citations.map((c, i) => (
-              <span
-                key={i}
-                className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] text-foreground/80"
-                title={c.source ?? undefined}
-              >
-                {c.source ?? "Unknown"}
-                {c.page != null ? ` · p.${c.page}` : ""}
-              </span>
+              <CitationChip key={i} citation={c} />
             ))}
-          </div>
+         </div>
         )}
 
         {!isUser && message.content && (
