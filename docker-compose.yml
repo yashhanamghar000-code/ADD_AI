@@ -1,0 +1,83 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: audito-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/data:/backend/data
+      - ./backend/bm25_cache:/backend/bm25_cache
+      - ./backend/chat_history:/backend/chat_history
+      - ./backend/debug_logs:/backend/debug_logs
+      - ./backend/temp_uploads:/backend/temp_uploads
+    depends_on:
+      - postgres
+      - qdrant
+      - redis
+
+  worker:
+    build:
+      context: ./backend
+    container_name: audito-worker
+    # app.infrastructure.queue.celery_app is where the Celery() instance
+    # actually lives now (composition-root-adjacent, next to tasks.py).
+    command: celery -A app.infrastructure.queue.celery_app.celery_app worker --loglevel=info --concurrency=3
+    env_file:
+      - ./backend/.env
+    volumes:
+      # Mounts match the `backend` service exactly — the Dockerfile's
+      # WORKDIR is /backend, and both the web process and the worker read
+      #/write uploads, vectors, and history relative to that same path.
+      - ./backend/data:/backend/data
+      - ./backend/bm25_cache:/backend/bm25_cache
+      - ./backend/chat_history:/backend/chat_history
+      - ./backend/debug_logs:/backend/debug_logs
+      - ./backend/temp_uploads:/backend/temp_uploads
+    depends_on:
+      - postgres
+      - redis
+    # concurrency=3: lets up to 3 users' uploads run at the same time
+    # instead of one large file blocking every other user's upload.
+    # parser_max_workers is capped lower (see .env.example) so 3 concurrent
+    # files still don't oversubscribe the CPU.
+    #
+    # Scale across machines later with, e.g.:
+    #   docker compose up --scale worker=3
+
+  postgres:
+    image: postgres:16
+    container_name: audito-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: audito_user
+      POSTGRES_PASSWORD: audito_pass
+      POSTGRES_DB: audito_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - audito_pg_data:/var/lib/postgresql/data
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: audito-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - audito_qdrant_data:/qdrant/storage
+
+  redis:
+    image: redis:7-alpine
+    container_name: audito-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  audito_pg_data:
+  audito_qdrant_data:
