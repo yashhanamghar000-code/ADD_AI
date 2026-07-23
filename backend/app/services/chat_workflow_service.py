@@ -222,11 +222,22 @@ class ChatWorkflowService:
             body = body.split("### Extracted Document Tables:")[0]  # drop trailing table markdown
             body = body.strip()
 
-            # A short, distinctive snippet (not the whole chunk) is enough
-            # for the frontend's text-layer search to locate the passage
-            # on the page reliably, while staying short enough to almost
-            # always appear verbatim in PDF.js's extracted text layer.
-            snippet = " ".join(body.split()[:18])
+            # Table-derived chunks have their numbers rearranged into
+            # markdown "| ... | ... |" cells that never appear verbatim on
+            # the actual rendered PDF page (the page shows a real table
+            # layout, not pipe-delimited text) — searching for that text
+            # on the page can never succeed, so skip the highlight attempt
+            # entirely rather than sending a snippet that's guaranteed not
+            # to match. The frontend still scrolls to the correct page.
+            if d.metadata.get("has_table"):
+                snippet = None
+            else:
+                # 24 words (not the whole chunk) — long enough to be a
+                # distinctive fingerprint that won't collide with an
+                # unrelated repeated phrase elsewhere on the page, short
+                # enough that the frontend's fuzzy line-matcher can still
+                # tolerate a few OCR/spacing mismatches and find it.
+                snippet = " ".join(body.split()[:24]) or None
 
             citations.append({
                 "source": d.source,

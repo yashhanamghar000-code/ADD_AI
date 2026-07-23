@@ -1,23 +1,28 @@
 /**
- * NEW FILE — copy into src/components/citation/CitationPdfPanel.jsx
+ * REPLACE your existing
+ * src/components/citation/CitationPdfPanel.jsx with this file.
  *
- * The right-side panel: renders the ORIGINAL PDF for the cited file,
- * scrollable, auto-scrolled to the cited page, with the matched snippet
- * highlighted on that page. Sits opposite your sidebar (mount it in your
- * root layout — see the README in this zip for the one-line integration).
+ * v2 fixes vs. what you have:
  *
- * Needs `pdfjs-dist`:
- *   npm install pdfjs-dist
+ * 1. ACCURATE SCROLL-TO-PAGE: previously, scrollIntoView fired on a fixed
+ *    150ms timer, but pages render asynchronously and each one "pops in"
+ *    at full height once its canvas finishes drawing — so pages ABOVE the
+ *    target were still reflowing (pushing content down) after the scroll
+ *    already happened, landing you slightly off. Now every page reserves
+ *    its correct pixel height immediately (from PDF.js's viewport, which
+ *    is known before rendering) via a placeholder div, so there's no
+ *    layout shift, and we scroll only after the TARGET page itself has
+ *    actually finished rendering (via a real completion callback, not a
+ *    guessed timeout).
+ *
+ * 2. Uses the new fuzzy line-matching in pdfTextHighlight.js (v2) for
+ *    more reliable, single-line highlight bars instead of scattered boxes.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import { getAuthHeaders, getDocumentFileUrl } from "../../lib/citationApi";
 import { computeHighlightRects, findMatchingItemIndices } from "../../lib/pdfTextHighlight";
 
-// pdf.js needs its worker script. The CDN URL below matches whatever
-// pdfjs-dist version npm installs, so it stays in sync automatically and
-// needs zero bundler configuration. Swap for a locally-bundled worker
-// later if you need fully offline support — see README.
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 const RENDER_SCALE = 1.4;
@@ -30,12 +35,12 @@ export default function CitationPdfPanel({ citation, onClose }) {
 
   const scrollContainerRef = useRef(null);
   const pageRefs = useRef({}); // pageNumber -> HTMLDivElement
+  const hasScrolledRef = useRef(false);
 
   const fileId = citation?.file_id;
   const targetPage = Number(citation?.page) || 1;
   const snippet = citation?.snippet || "";
 
-  // Load the document whenever the citation's file changes.
   useEffect(() => {
     if (!fileId) return;
     let cancelled = false;
@@ -44,6 +49,7 @@ export default function CitationPdfPanel({ citation, onClose }) {
     setError(null);
     setPdfDoc(null);
     pageRefs.current = {};
+    hasScrolledRef.current = false;
 
     const loadingTask = pdfjsLib.getDocument({
       url: getDocumentFileUrl(fileId),
@@ -70,19 +76,17 @@ export default function CitationPdfPanel({ citation, onClose }) {
     };
   }, [fileId]);
 
-  // Once loaded, scroll to the target page.
-  useEffect(() => {
-    if (!pdfDoc) return;
+  // Called by the target PdfPage once ITS canvas has actually finished
+  // rendering — this is the accurate trigger to scroll, instead of a
+  // fixed timeout that races against every other page's render.
+  const handleTargetPageReady = useCallback(() => {
+    if (hasScrolledRef.current) return;
     const el = pageRefs.current[targetPage];
-    if (el && scrollContainerRef.current) {
-      // Small delay lets the target page (and a couple neighbors) finish
-      // their render pass before we scroll, so layout heights are final.
-      const t = setTimeout(() => {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 150);
-      return () => clearTimeout(t);
+    if (el) {
+      hasScrolledRef.current = true;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [pdfDoc, targetPage]);
+  }, [targetPage]);
 
   if (!citation) return null;
 
@@ -111,6 +115,7 @@ export default function CitationPdfPanel({ citation, onClose }) {
               isTarget={pageNumber === targetPage}
               snippet={pageNumber === targetPage ? snippet : ""}
               registerRef={(el) => (pageRefs.current[pageNumber] = el)}
+              onTargetRendered={pageNumber === targetPage ? handleTargetPageReady : undefined}
             />
           ))}
       </div>
@@ -118,15 +123,15 @@ export default function CitationPdfPanel({ citation, onClose }) {
   );
 }
 
-/**
- * One page: renders its canvas, and — only on the target page — overlays
- * highlight boxes for the matched snippet once text content is available.
- */
-function PdfPage({ pdfDoc, pageNumber, isTarget, snippet, registerRef }) {
+function PdfPage({ pdfDoc, pageNumber, isTarget, snippet, registerRef, onTargetRendered }) {
   const canvasRef = useRef(null);
-  const containerRef = useRef(null);
   const [highlightRects, setHighlightRects] = useState([]);
   const [rendered, setRendered] = useState(false);
+  // Reserved BEFORE the canvas actually paints, from the page's viewport
+  // (known synchronously, no need to wait for render()) — this is what
+  // stops later-appearing pages from shifting earlier ones (and therefore
+  // the target page) after a scroll has already happened.
+  const [reservedSize, setReservedSize] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +139,7 @@ function PdfPage({ pdfDoc, pageNumber, isTarget, snippet, registerRef }) {
     pdfDoc.getPage(pageNumber).then(async (page) => {
       if (cancelled) return;
       const viewport = page.getViewport({ scale: RENDER_SCALE });
+      setReservedSize({ width: viewport.width, height: viewport.height });
 
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -153,26 +159,37 @@ function PdfPage({ pdfDoc, pageNumber, isTarget, snippet, registerRef }) {
           setHighlightRects(computeHighlightRects(textContent, matchedIndices, viewport));
         }
       }
+
+      if (isTarget) {
+        onTargetRendered?.();
+      }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [pdfDoc, pageNumber, isTarget, snippet]);
+  }, [pdfDoc, pageNumber, isTarget, snippet, onTargetRendered]);
 
   return (
     <div
-      ref={(el) => {
-        containerRef.current = el;
-        registerRef(el);
-      }}
+      ref={registerRef}
       style={{
         ...styles.pageContainer,
         ...(isTarget ? styles.targetPageContainer : {}),
+        // Reserve the exact final height up front so this page never
+        // pops in and shifts pages below/above it after we've scrolled.
+        minHeight: reservedSize ? reservedSize.height + 24 : undefined,
       }}
     >
       <div style={styles.pageLabel}>Page {pageNumber}</div>
-      <div style={{ position: "relative", display: "inline-block" }}>
+      <div
+        style={{
+          position: "relative",
+          display: "inline-block",
+          width: reservedSize?.width,
+          height: reservedSize?.height,
+        }}
+      >
         <canvas ref={canvasRef} style={styles.canvas} />
         {rendered &&
           highlightRects.map((rect, i) => (
@@ -187,6 +204,7 @@ function PdfPage({ pdfDoc, pageNumber, isTarget, snippet, registerRef }) {
                 backgroundColor: "rgba(255, 224, 102, 0.55)",
                 borderRadius: 2,
                 pointerEvents: "none",
+                transition: "opacity 0.3s ease",
               }}
             />
           ))}
