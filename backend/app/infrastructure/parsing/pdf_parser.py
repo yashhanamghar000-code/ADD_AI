@@ -127,17 +127,17 @@ class PdfDocumentParser(IDocumentParser):
                     pypdf_page = local_reader.pages[page_num - 1]
                     native_rotation = pypdf_page.get("/Rotate", 0)
                 except Exception:
-                    print(f"   \u26a0\ufe0f Page {page_num}: Could not fetch page rotation metadata.")
+                    print(f"   ⚠️ Page {page_num}: Could not fetch page rotation metadata.")
 
                 if (native_rotation in [90, 270] or needs_forced_rotation) and pypdf_page is not None and not used_fallback:
                     rotation_angle = (360 - native_rotation) if native_rotation in [90, 270] else 90
-                    print(f"   -> Page {page_num}: Adjusting layout by {rotation_angle}\u00b0 to normalize horizontal reading axis...")
+                    print(f"   -> Page {page_num}: Adjusting layout by {rotation_angle}° to normalize horizontal reading axis...")
                     try:
                         pypdf_page.rotate(rotation_angle)
                         raw_text = pypdf_page.extract_text() or ""
                         used_fallback = True
                     except Exception as e:
-                        print(f"   \u26a0\ufe0f Rotation parsing stream bottleneck on Page {page_num}: {e}")
+                        print(f"   ⚠️ Rotation parsing stream bottleneck on Page {page_num}: {e}")
 
                 # --- STEP 3: normal extraction path if rotation wasn't needed ---
                 if not used_fallback:
@@ -145,13 +145,13 @@ class PdfDocumentParser(IDocumentParser):
                         tables = page.extract_tables()
                         raw_text = page.extract_text() or ""
                     except Exception:
-                        print(f"   \u26a0\ufe0f Layout stream bottleneck on Page {page_num}. Executing recovery...")
+                        print(f"   ⚠️ Layout stream bottleneck on Page {page_num}. Executing recovery...")
                         try:
                             if pypdf_page is not None:
                                 raw_text = pypdf_page.extract_text() or ""
                                 used_fallback = True
                         except Exception:
-                            print(f"   \u274c Critical Error: Page {page_num} unreadable. Skipping.")
+                            print(f"   ❌ Critical Error: Page {page_num} unreadable. Skipping.")
                             return None
 
                 # --- STEP 4: last-resort recovery if fallback path produced nothing ---
@@ -159,20 +159,57 @@ class PdfDocumentParser(IDocumentParser):
                     try:
                         raw_text = pypdf_page.extract_text() or ""
                     except Exception:
-                        print(f"   \u274c Critical Recovery Error: Page {page_num} completely unparseable.")
+                        print(f"   ❌ Critical Recovery Error: Page {page_num} completely unparseable.")
                         return None
 
             # --- STEP 5: OCR fallback only when extracted text is genuinely poor/missing ---
+            # Uses image_to_data (word-level bounding boxes) instead of
+            # image_to_string (flat text) so citations can later highlight
+            # the exact region on scanned pages that have no embedded PDF
+            # text layer at all — plain OCR text alone gives pdf.js nothing
+            # to search/highlight against on the client.
+            ocr_words: List[Dict] = []
+            page_width_pt = page_height_pt = None
             if len(raw_text.strip()) < 50:
                 try:
                     with fitz.open(file_path) as fitz_doc:
                         fitz_page = fitz_doc.load_page(page_num - 1)
+                        page_width_pt = fitz_page.rect.width
+                        page_height_pt = fitz_page.rect.height
                         zoom = 150 / 72
                         pix = fitz_page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        ocr_text = pytesseract.image_to_string(img, config="--psm 6")
+
+                        data = pytesseract.image_to_data(
+                            img, config="--psm 6", output_type=pytesseract.Output.DICT
+                        )
+                        n = len(data["text"])
+                        words_out = []
+                        for i in range(n):
+                            word = data["text"][i].strip()
+                            conf_raw = data.get("conf", ["-1"] * n)[i]
+                            conf = int(conf_raw) if str(conf_raw).lstrip("-").isdigit() else -1
+                            if not word or conf < 30:
+                                continue
+                            # image pixel space -> PDF point space (divide
+                            # by zoom); y flipped since image origin is
+                            # top-left but PDF page origin is bottom-left.
+                            x_px, y_px = data["left"][i], data["top"][i]
+                            w_px, h_px = data["width"][i], data["height"][i]
+                            x0 = x_px / zoom
+                            x1 = (x_px + w_px) / zoom
+                            y1 = page_height_pt - (y_px / zoom)
+                            y0 = page_height_pt - ((y_px + h_px) / zoom)
+                            words_out.append({
+                                "text": word,
+                                "x0": round(x0, 2), "y0": round(y0, 2),
+                                "x1": round(x1, 2), "y1": round(y1, 2),
+                            })
+
+                        ocr_text = " ".join(w["text"] for w in words_out)
                         if len(ocr_text.strip()) > len(raw_text.strip()):
                             raw_text = ocr_text
+                            ocr_words = words_out
                             image_summary_context += "\n[System Note: Text extracted via OCR.]"
                         img.close()
                 except Exception as e:
@@ -204,6 +241,9 @@ class PdfDocumentParser(IDocumentParser):
                     "has_table": bool(table_markdown),
                     "has_images": has_images,
                     "was_rotated": used_fallback,
+                    "ocr_words": ocr_words or None,
+                    "ocr_page_width": page_width_pt,
+                    "ocr_page_height": page_height_pt,
                     **tenant_metadata,
                 },
             )

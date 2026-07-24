@@ -1,12 +1,12 @@
 """
 FULL FILE — replace your existing backend/app/services/chat_workflow_service.py.
 
-Only change vs. your current version: the `_generate_node` citation-building
-block now also captures `file_id` (from the chunk's metadata, so the
-frontend knows which PDF to fetch) and a short `snippet` of the actual
-matched text (so the frontend can highlight it on the rendered page).
-Nothing else changed — same decompose -> retrieve -> generate pipeline,
-same prompts, same round-robin source grouping.
+Citation building now also captures `file_id`, a `snippet` of matched
+text, and — for OCR'd/scanned pages that have no embedded PDF text layer —
+a `bbox` computed from the OCR word bounding boxes captured in
+pdf_parser.py, via the new `_find_ocr_bbox` helper. Everything else is
+unchanged: same decompose -> retrieve -> generate pipeline, same prompts,
+same round-robin source grouping.
 """
 import re
 import json
@@ -191,10 +191,10 @@ class ChatWorkflowService:
     def _build_citations(retrieved_docs: List[DocumentChunk], max_citations: int = 3) -> List[Dict[str, Any]]:
         """
         Builds the citation payload the frontend uses to open the PDF
-        viewer panel: which file (`file_id`), which page (`page`), and a
-        short `snippet` of the actual chunk text so the frontend can find
-        and highlight that exact passage on the rendered page instead of
-        just jumping to the page with nothing highlighted.
+        viewer panel: which file (`file_id`), which page (`page`), a short
+        `snippet` of the actual chunk text, and — for OCR'd/scanned pages
+        only — a `bbox` (exact highlight region in PDF point space) plus
+        the page's `page_width`/`page_height` needed to scale it.
 
         The snippet strips the internal "ATTENTION LLM: FILE: ... | PAGE:
         ..." scaffolding line the parser prepends to every chunk (see
@@ -212,7 +212,6 @@ class ChatWorkflowService:
             seen_keys.add(key)
 
             body = d.content
-            marker = "\n"
             if body.startswith("ATTENTION LLM:"):
                 # First line is the "FILE: ... | PAGE: ..." scaffold; the
                 # real extracted text starts right after it.
@@ -239,17 +238,72 @@ class ChatWorkflowService:
                 # tolerate a few OCR/spacing mismatches and find it.
                 snippet = " ".join(body.split()[:24]) or None
 
+            # Scanned pages have no embedded PDF text layer at all, so
+            # pdf.js's client-side text search (which the frontend falls
+            # back to via `snippet`) can never find anything to highlight
+            # there. For those pages we instead compute the exact
+            # highlight region here, from the word-level bounding boxes
+            # captured during OCR (see pdf_parser.py), and send it as
+            # `bbox` — the frontend draws this directly instead of
+            # searching the (empty) text layer.
+            bbox = None
+            ocr_words = d.metadata.get("ocr_words")
+            if snippet and ocr_words:
+                bbox = ChatWorkflowService._find_ocr_bbox(ocr_words, snippet)
+
             citations.append({
                 "source": d.source,
                 "page": d.page,
                 "file_id": d.metadata.get("file_id"),
                 "snippet": snippet,
+                "bbox": bbox,
+                "page_width": d.metadata.get("ocr_page_width") if bbox else None,
+                "page_height": d.metadata.get("ocr_page_height") if bbox else None,
             })
 
             if len(citations) >= max_citations:
                 break
 
         return citations
+
+    @staticmethod
+    def _find_ocr_bbox(ocr_words: List[Dict[str, Any]], snippet: str) -> Optional[Dict[str, float]]:
+        """
+        Finds the run of OCR words whose text best matches the start of
+        `snippet`, and returns the union of their bounding boxes (already
+        in PDF point space — see pdf_parser.py). Returns None if no
+        reasonable match is found (e.g. OCR mangled the text badly enough
+        that the words don't line up), in which case the frontend just
+        scrolls to the page without a highlight rather than drawing a
+        wrong one.
+        """
+        target_words = snippet.split()[:8]  # first ~8 words is enough to anchor a match
+        if len(target_words) < 3 or not ocr_words:
+            return None
+
+        target_norm = [w.strip(".,;:()[]\"'").lower() for w in target_words]
+        page_words_norm = [w.get("text", "").strip(".,;:()[]\"'").lower() for w in ocr_words]
+
+        best_start, best_score = None, 0
+        window = len(target_norm)
+        for i in range(len(page_words_norm) - window + 1):
+            candidate = page_words_norm[i : i + window]
+            score = sum(1 for a, b in zip(candidate, target_norm) if a == b)
+            if score > best_score:
+                best_score, best_start = score, i
+
+        # Require at least half the anchor words to match — otherwise this
+        # is noise, not a real hit.
+        if best_start is None or best_score < window / 2:
+            return None
+
+        matched = ocr_words[best_start : best_start + window]
+        return {
+            "x0": min(w["x0"] for w in matched),
+            "y0": min(w["y0"] for w in matched),
+            "x1": max(w["x1"] for w in matched),
+            "y1": max(w["y1"] for w in matched),
+        }
 
     @staticmethod
     def _build_system_prompt() -> str:

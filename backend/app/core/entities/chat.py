@@ -1,8 +1,9 @@
 """
 FULL FILE — replace your existing backend/app/core/entities/chat.py.
-Citation now carries `file_id` (to fetch the right PDF) and `snippet`
-(the actual matched text, used by the frontend to highlight it on the
-page) in addition to source/page.
+Citation carries file_id (to fetch the right PDF), snippet (matched text
+for the frontend to highlight on normal pages), and bbox/page_width/
+page_height (exact highlight region for OCR'd/scanned pages, which have
+no embedded PDF text layer to search).
 """
 from __future__ import annotations
 
@@ -16,6 +17,14 @@ class Citation:
     page: Any
     file_id: Optional[str] = None
     snippet: Optional[str] = None
+    # Present only for OCR'd (scanned) pages, where there's no embedded PDF
+    # text layer for the frontend to search — bbox is the exact region (in
+    # PDF point space) to highlight instead, computed server-side from the
+    # OCR word bounding boxes. page_width/page_height are needed by the
+    # frontend to scale bbox into its rendered canvas coordinates.
+    bbox: Optional[Dict[str, float]] = None
+    page_width: Optional[float] = None
+    page_height: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -23,6 +32,9 @@ class Citation:
             "page": self.page,
             "file_id": self.file_id,
             "snippet": self.snippet,
+            "bbox": self.bbox,
+            "page_width": self.page_width,
+            "page_height": self.page_height,
         }
 
 
